@@ -5,26 +5,53 @@ import { Label } from "../ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { Logo } from "./Logo";
 import { ImageWithFallback } from "./figma/ImageWithFallback";
+import { useAuth } from "../../contexts/AuthContext";
 
-interface LoginScreenProps {
-  onLogin: () => void;
-}
-
-export function LoginScreen({ onLogin }: LoginScreenProps) {
+export function LoginScreen() {
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [registerEmail, setRegisterEmail] = useState("");
   const [registerPassword, setRegisterPassword] = useState("");
   const [registerConfirm, setRegisterConfirm] = useState("");
+  const [registerName, setRegisterName] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { login, register } = useAuth();
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    onLogin();
+    setError(null);
+    setIsSubmitting(true);
+    try {
+      await login({ email: loginEmail, password: loginPassword });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Não foi possível entrar';
+      setError(message);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    onLogin();
+    if (registerPassword !== registerConfirm) {
+      setError('As senhas não coincidem');
+      return;
+    }
+    setError(null);
+    setIsSubmitting(true);
+    try {
+      await register({
+        name: registerName || registerEmail.split('@')[0],
+        email: registerEmail,
+        password: registerPassword,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Não foi possível registrar';
+      setError(message);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -97,13 +124,23 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                   </a>
                 </div>
                 <Button type="submit" className="w-full bg-primary hover:bg-primary/90">
-                  Entrar
+                  {isSubmitting ? 'Entrando...' : 'Entrar'}
                 </Button>
               </form>
             </TabsContent>
 
             <TabsContent value="register">
               <form onSubmit={handleRegister} className="space-y-6">
+                <div className="space-y-2">
+                  <Label htmlFor="register-name">Nome</Label>
+                  <Input
+                    id="register-name"
+                    placeholder="Seu nome"
+                    value={registerName}
+                    onChange={(e) => setRegisterName(e.target.value)}
+                    className="bg-secondary border-border"
+                  />
+                </div>
                 <div className="space-y-2">
                   <Label htmlFor="register-email">E-mail</Label>
                   <Input
@@ -141,11 +178,15 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                   />
                 </div>
                 <Button type="submit" className="w-full bg-primary hover:bg-primary/90">
-                  Criar conta
+                  {isSubmitting ? 'Registrando...' : 'Criar conta'}
                 </Button>
               </form>
             </TabsContent>
           </Tabs>
+
+          {error && (
+            <div className="text-sm text-destructive text-center">{error}</div>
+          )}
 
           <div className="text-center pt-6 border-t border-border">
             <Logo size="sm" />

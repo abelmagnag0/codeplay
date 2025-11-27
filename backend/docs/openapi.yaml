@@ -1,0 +1,1156 @@
+openapi: 3.0.3
+info:
+  title: Codeplay API
+  description: >-
+    API para autenticação, desafios, rankings, salas e mensagens do Codeplay.
+    Documentação gerada manualmente a partir das rotas existentes.
+  version: 1.0.0
+  contact:
+    name: Equipe Codeplay
+    email: suporte@codeplay.dev
+servers:
+  - url: http://localhost:4000
+    description: Ambiente local
+  - url: https://api.codeplay.dev
+    description: Produção
+tags:
+  - name: Auth
+    description: Fluxos de autenticação e gerenciamento de sessão
+  - name: Users
+    description: Perfis de usuários e administração
+  - name: Challenges
+    description: Catálogo e gestão de desafios
+  - name: Submissions
+    description: Envio de soluções e avaliação automática
+  - name: Ranking
+    description: Rankings globais, por categoria e por sala
+  - name: Rooms
+    description: Salas colaborativas, mensagens e controle de compartilhamento de tela
+paths:
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      summary: Registra um novo usuário
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Usuário criado com sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          description: E-mail já registrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Autentica um usuário já existente
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login bem-sucedido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          description: Credenciais inválidas ou e-mail não verificado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Rotaciona tokens de acesso
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+                  format: jwt
+      responses:
+        '200':
+          description: Tokens atualizados
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          description: Refresh token inválido ou expirado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoga um refresh token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token:
+                  type: string
+                  description: Refresh token a ser revogado
+      responses:
+        '200':
+          description: Logout realizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        '204':
+          description: Nenhum token informado
+  /api/auth/email/verify:
+    post:
+      tags: [Auth]
+      summary: Confirma o endereço de e-mail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+                  description: Token de verificação recebido por e-mail
+      responses:
+        '200':
+          description: E-mail confirmado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/User'
+        '400':
+          description: Token inválido ou expirado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/auth/email/resend:
+    post:
+      tags: [Auth]
+      summary: Reenvia o e-mail de verificação
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '204':
+          description: Solicitação aceita
+        '403':
+          description: Conta bloqueada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/auth/password/forgot:
+    post:
+      tags: [Auth]
+      summary: Solicita a redefinição de senha
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '204':
+          description: Solicitação aceita
+  /api/auth/password/reset:
+    post:
+      tags: [Auth]
+      summary: Define uma nova senha a partir de um token válido
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token:
+                  type: string
+                  description: Token de redefinição recebido por e-mail
+                password:
+                  type: string
+                  format: password
+      responses:
+        '204':
+          description: Senha alterada com sucesso
+        '400':
+          description: Token inválido/expirado ou payload inválido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/auth/sessions:
+    get:
+      tags: [Auth]
+      summary: Lista sessões (refresh tokens ativos)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Lista de sessões ativas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Session'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /api/auth/sessions/{sessionId}:
+    delete:
+      tags: [Auth]
+      summary: Revoga uma sessão específica
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Identificador da sessão (tokenId)
+      responses:
+        '204':
+          description: Sessão revogada
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          description: Sessão não encontrada
+  /api/users/me:
+    get:
+      tags: [Users]
+      summary: Retorna o perfil do usuário logado
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Perfil do usuário
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+    patch:
+      tags: [Users]
+      summary: Atualiza o perfil do usuário logado
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProfileRequest'
+      responses:
+        '200':
+          description: Perfil atualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /api/users:
+    get:
+      tags: [Users]
+      summary: Lista usuários (somente admin)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RoleFilter'
+        - $ref: '#/components/parameters/StatusFilter'
+        - $ref: '#/components/parameters/SearchQuery'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - in: query
+          name: sort
+          schema:
+            type: string
+            enum: [newest, oldest, nameAsc, nameDesc, xpAsc, xpDesc]
+      responses:
+        '200':
+          description: Lista de usuários
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Requer perfil admin
+  /api/users/{id}/role:
+    patch:
+      tags: [Users]
+      summary: Atualiza a role de um usuário
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/UserIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  type: string
+                  enum: [user, admin]
+      responses:
+        '200':
+          description: Role atualizada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Requer perfil admin
+        '404':
+          description: Usuário não encontrado
+  /api/users/{id}/status:
+    patch:
+      tags: [Users]
+      summary: Atualiza o status de um usuário
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/UserIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [active, blocked]
+      responses:
+        '200':
+          description: Status atualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Requer perfil admin
+        '404':
+          description: Usuário não encontrado
+  /api/challenges:
+    get:
+      tags: [Challenges]
+      summary: Lista desafios com filtros e paginação
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: category
+          schema:
+            type: string
+        - in: query
+          name: difficulty
+          schema:
+            type: string
+            enum: [easy, medium, hard]
+        - in: query
+          name: tags
+          schema:
+            type: string
+            description: Lista separada por vírgula
+        - in: query
+          name: minXp
+          schema:
+            type: integer
+        - in: query
+          name: maxXp
+          schema:
+            type: integer
+        - in: query
+          name: search
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Lista de desafios
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Challenge'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+    post:
+      tags: [Challenges]
+      summary: Cria um desafio (admin)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChallengeInput'
+      responses:
+        '201':
+          description: Desafio criado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Challenge'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Requer perfil admin
+  /api/challenges/{id}:
+    get:
+      tags: [Challenges]
+      summary: Obtém detalhes de um desafio
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ChallengeIdPath'
+      responses:
+        '200':
+          description: Desafio encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Challenge'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          description: Desafio não encontrado
+    put:
+      tags: [Challenges]
+      summary: Atualiza um desafio (admin)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ChallengeIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChallengeInput'
+      responses:
+        '200':
+          description: Desafio atualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Challenge'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Requer perfil admin
+        '404':
+          description: Desafio não encontrado
+    delete:
+      tags: [Challenges]
+      summary: Remove um desafio (admin)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ChallengeIdPath'
+      responses:
+        '204':
+          description: Desafio removido
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Requer perfil admin
+        '404':
+          description: Desafio não encontrado
+  /api/submissions:
+    post:
+      tags: [Submissions]
+      summary: Envia uma solução para avaliação
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmissionInput'
+      responses:
+        '201':
+          description: Resultado da submissão
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmissionResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          description: Desafio não encontrado ou acesso negado à sala
+  /api/ranking:
+    get:
+      tags: [Ranking]
+      summary: Ranking global de usuários
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: period
+          schema:
+            type: string
+            enum: [daily, weekly, monthly, custom]
+        - in: query
+          name: from
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: to
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: roomId
+          schema:
+            type: string
+            format: objectId
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Ranking de usuários
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RankingEntry'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+  /api/ranking/category/{category}:
+    get:
+      tags: [Ranking]
+      summary: Ranking filtrado por categoria
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: category
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Ranking por categoria
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RankingEntry'
+  /api/rooms:
+    get:
+      tags: [Rooms]
+      summary: Lista salas disponíveis
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: isPrivate
+          schema:
+            type: boolean
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Lista de salas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Room'
+    post:
+      tags: [Rooms]
+      summary: Cria uma nova sala
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoomInput'
+      responses:
+        '201':
+          description: Sala criada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Room'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+  /api/rooms/{id}:
+    get:
+      tags: [Rooms]
+      summary: Detalhes de uma sala
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RoomIdPath'
+      responses:
+        '200':
+          description: Sala encontrada (inclui estado atual de screen share)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomWithScreenShare'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          description: Sala não encontrada
+  /api/rooms/{id}/join:
+    post:
+      tags: [Rooms]
+      summary: Solicita entrada em uma sala
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RoomIdPath'
+      responses:
+        '200':
+          description: Participação confirmada (inclui estado atual de screen share)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomWithScreenShare'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Sala privada ou usuário não convidado
+  /api/rooms/{id}/messages:
+    get:
+      tags: [Rooms]
+      summary: Lista mensagens de uma sala
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RoomIdPath'
+      responses:
+        '200':
+          description: Histórico da sala
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Message'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Usuário não participa da sala
+    post:
+      tags: [Rooms]
+      summary: Envia uma mensagem na sala
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RoomIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+                  minLength: 1
+                  maxLength: 2000
+      responses:
+        '201':
+          description: Mensagem enviada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Usuário não participa da sala
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+    Offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+    SearchQuery:
+      name: search
+      in: query
+      schema:
+        type: string
+    RoleFilter:
+      name: role
+      in: query
+      schema:
+        type: string
+        enum: [user, admin]
+    StatusFilter:
+      name: status
+      in: query
+      schema:
+        type: string
+        enum: [active, blocked]
+    UserIdPath:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: objectId
+    ChallengeIdPath:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: objectId
+    RoomIdPath:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: objectId
+  responses:
+    ValidationError:
+      description: Payload inválido
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ValidationError'
+    UnauthorizedError:
+      description: Autenticação necessária
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    Pagination:
+      type: object
+      properties:
+        limit:
+          type: integer
+        offset:
+          type: integer
+        total:
+          type: integer
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        avatar:
+          type: string
+          nullable: true
+        bio:
+          type: string
+          nullable: true
+        role:
+          type: string
+          enum: [user, admin]
+        status:
+          type: string
+          enum: [active, blocked]
+        xp:
+          type: integer
+        level:
+          type: integer
+        badges:
+          type: array
+          items:
+            type: string
+        emailVerified:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    Session:
+      type: object
+      properties:
+        id:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        lastUsedAt:
+          type: string
+          format: date-time
+          nullable: true
+        expiresAt:
+          type: string
+          format: date-time
+        ip:
+          type: string
+          nullable: true
+        userAgent:
+          type: string
+          nullable: true
+    Challenge:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        difficulty:
+          type: string
+          enum: [easy, medium, hard]
+        category:
+          type: string
+        xp:
+          type: integer
+        tags:
+          type: array
+          items:
+            type: string
+        starterCode:
+          type: string
+          nullable: true
+        solution:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ChallengeInput:
+      type: object
+      required: [title, description, difficulty, category, xp]
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        difficulty:
+          type: string
+          enum: [easy, medium, hard]
+        category:
+          type: string
+        xp:
+          type: integer
+          minimum: 0
+        tags:
+          type: array
+          items:
+            type: string
+        starterCode:
+          type: string
+        solution:
+          type: string
+        roomId:
+          type: string
+          nullable: true
+    SubmissionInput:
+      type: object
+      required: [challengeId, code]
+      properties:
+        challengeId:
+          type: string
+        code:
+          type: string
+        language:
+          type: string
+        roomId:
+          type: string
+          nullable: true
+    SubmissionResponse:
+      type: object
+      properties:
+        isCorrect:
+          type: boolean
+        awardedXp:
+          type: integer
+        challengeId:
+          type: string
+        roomId:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+    RankingEntry:
+      type: object
+      properties:
+        userId:
+          type: string
+        name:
+          type: string
+        avatar:
+          type: string
+          nullable: true
+        xp:
+          type: integer
+        totalXp:
+          type: integer
+        rank:
+          type: integer
+        badges:
+          type: array
+          items:
+            type: string
+        lastSubmissionAt:
+          type: string
+          format: date-time
+          nullable: true
+    Room:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        isPrivate:
+          type: boolean
+        ownerId:
+          type: string
+        participants:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ScreenShareState:
+      type: object
+      properties:
+        roomId:
+          type: string
+          description: Identificador da sala à qual o estado pertence
+        isActive:
+          type: boolean
+          description: Indica se há um apresentador ativo
+        ownerUserId:
+          type: string
+          nullable: true
+          description: Usuário que está apresentando a tela quando `isActive` for verdadeiro
+        viewers:
+          type: array
+          items:
+            type: string
+          description: Lista de usuários atualmente conectados à sessão (exclui o apresentador)
+      required: [roomId, isActive, viewers]
+    RoomWithScreenShare:
+      allOf:
+        - $ref: '#/components/schemas/Room'
+        - type: object
+          properties:
+            screenShare:
+              $ref: '#/components/schemas/ScreenShareState'
+          description: Estado atual da sessão de compartilhamento de tela associado à sala
+    RoomInput:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 3
+          maxLength: 100
+        isPrivate:
+          type: boolean
+          default: false
+        participantIds:
+          type: array
+          items:
+            type: string
+    Message:
+      type: object
+      properties:
+        id:
+          type: string
+        roomId:
+          type: string
+        content:
+          type: string
+        user:
+          $ref: '#/components/schemas/User'
+        createdAt:
+          type: string
+          format: date-time
+    RegisterRequest:
+      type: object
+      required: [name, email, password]
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+    UpdateProfileRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        bio:
+          type: string
+        avatar:
+          type: string
+    AuthResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        user:
+          $ref: '#/components/schemas/User'
+    ValidationError:
+      type: object
+      properties:
+        message:
+          type: string
+          example: Validation failed
+        details:
+          type: array
+          items:
+            type: string
+    ErrorResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        details:
+          type: array
+          items:
+            type: string
+            nullable: true

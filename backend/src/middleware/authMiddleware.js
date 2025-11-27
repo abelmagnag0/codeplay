@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
+const userRepository = require('../repositories/userRepository');
 
-const ensureAuthenticated = (req, res, next) => {
+const ensureAuthenticated = async (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
 
   if (!token) {
@@ -9,7 +10,23 @@ const ensureAuthenticated = (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded;
+
+    const enriched = { ...decoded };
+
+    if (!enriched.email || !enriched.name) {
+      const user = await userRepository.findById(decoded.id);
+      if (!user) {
+        return next({ status: 401, message: 'Invalid or expired token' });
+      }
+      if (!enriched.email) {
+        enriched.email = user.email;
+      }
+      if (!enriched.name) {
+        enriched.name = user.name;
+      }
+    }
+
+    req.user = enriched;
     next();
   } catch (error) {
     next({ status: 401, message: 'Invalid or expired token' });

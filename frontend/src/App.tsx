@@ -1,37 +1,43 @@
-import { useState } from "react";
-import { LoginScreen } from "./components/pages/LoginScreen";
-import { MainLayout } from "./components/pages/MainLayout";
-import { Dashboard } from "./components/pages/Dashboard";
-import { Challenges } from "./components/pages/Challenges";
-import { Ranking } from "./components/pages/Ranking";
-import { Rooms } from "./components/pages/Room";
-import { Chat } from "./components/pages/Chat";
-import { Profile } from "./components/pages/Profile";
-import { Admin } from "./components/pages/Admin";
+import { useCallback, useState } from "react";
+import { LoginScreen } from "./components/pages/LoginScreen.tsx";
+import { MainLayout } from "./components/pages/MainLayout.tsx";
+import { Dashboard } from "./components/pages/Dashboard.tsx";
+import { Challenges } from "./components/pages/Challenges.tsx";
+import { Ranking } from "./components/pages/Ranking.tsx";
+import { Rooms } from "./components/pages/Room.tsx";
+import { Chat } from "./components/pages/Chat.tsx";
+import { Profile } from "./components/pages/Profile.tsx";
+import { Admin } from "./components/pages/Admin.tsx";
+import { useAuth } from "./contexts/AuthContext";
+import type { RoomDetail } from "./types/api";
 
 type Page = 'login' | 'dashboard' | 'challenges' | 'ranking' | 'rooms' | 'chat' | 'profile' | 'admin';
 
 export default function App() {
-  const [currentPage, setCurrentPage] = useState<Page>('login');
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const { isAuthenticated, user, logout } = useAuth();
+  const [currentPage, setCurrentPage] = useState<Page>('dashboard');
+  const [activeRoom, setActiveRoom] = useState<RoomDetail | null>(null);
 
-  const handleLogin = () => {
-    setIsAuthenticated(true);
-    setCurrentPage('dashboard');
-  };
-
-  const handleLogout = () => {
-    setIsAuthenticated(false);
-    setCurrentPage('login');
-  };
-
-  const handleNavigate = (page: string) => {
+  const handleNavigate = useCallback((page: string) => {
+    if (page !== 'chat') {
+      setActiveRoom(null);
+    }
     setCurrentPage(page as Page);
-  };
+  }, []);
 
   if (!isAuthenticated) {
-    return <LoginScreen onLogin={handleLogin} />;
+    return <LoginScreen />;
   }
+
+  const handleRoomSelected = useCallback((room: RoomDetail) => {
+    setActiveRoom(room);
+    setCurrentPage('chat');
+  }, []);
+
+  const handleLeaveRoom = useCallback(() => {
+    setActiveRoom(null);
+    setCurrentPage('rooms');
+  }, []);
 
   const renderPage = () => {
     switch (currentPage) {
@@ -42,9 +48,13 @@ export default function App() {
       case 'ranking':
         return <Ranking />;
       case 'rooms':
-        return <Rooms onNavigate={handleNavigate} />;
+        return <Rooms onNavigate={handleNavigate} onRoomSelected={handleRoomSelected} />;
       case 'chat':
-        return <Chat onNavigate={handleNavigate} />;
+        return activeRoom ? (
+          <Chat room={activeRoom} onLeave={handleLeaveRoom} />
+        ) : (
+          <Rooms onNavigate={handleNavigate} onRoomSelected={handleRoomSelected} />
+        );
       case 'profile':
         return <Profile />;
       case 'admin':
@@ -59,7 +69,8 @@ export default function App() {
       <MainLayout 
         currentPage={currentPage} 
         onNavigate={handleNavigate}
-        onLogout={handleLogout}
+        onLogout={logout}
+        user={user}
       >
         {renderPage()}
       </MainLayout>

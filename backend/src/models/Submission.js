@@ -4,6 +4,7 @@ const submissionSchema = new Schema(
   {
     userId: { type: Types.ObjectId, ref: 'User', required: true },
     challengeId: { type: Types.ObjectId, ref: 'Challenge', required: true },
+    roomId: { type: Types.ObjectId, ref: 'Room' },
     code: { type: String, required: true },
     language: { type: String },
     isCorrect: { type: Boolean, default: false },

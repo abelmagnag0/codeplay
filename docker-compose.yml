@@ -1,0 +1,46 @@
+version: "3.9"
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: codeplay
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    depends_on:
+      - mongo
+    ports:
+      - "4000:4000"
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      MONGODB_URI: mongodb://mongo:27017/codeplay
+      CLIENT_ORIGIN: http://localhost:5173
+      JWT_SECRET: change-me
+      JWT_REFRESH_SECRET: change-me-too
+      JWT_EXPIRES_IN: 1d
+      JWT_REFRESH_EXPIRES_IN: 7d
+      BCRYPT_SALT_ROUNDS: 10
+      RATE_LIMIT_WINDOW_MS: 60000
+      RATE_LIMIT_MAX: 100
+      SMTP_HOST: smtp.example.com
+      SMTP_PORT: 587
+      SMTP_SECURE: "false"
+      SMTP_USER: change-me
+      SMTP_PASSWORD: change-me
+      EMAIL_FROM: "Codeplay <no-reply@codeplay.dev>"
+      APP_URL: http://localhost:5173
+      EMAIL_VERIFICATION_TTL_HOURS: 48
+      PASSWORD_RESET_TTL_MINUTES: 60
+      LOG_PRETTY: "false"
+
+volumes:
+  mongo-data:

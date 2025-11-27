@@ -1,8 +1,8 @@
 const rankingService = require('../services/rankingService');
 
-const getGlobal = async (_req, res, next) => {
+const getGlobal = async (req, res, next) => {
   try {
-    const ranking = await rankingService.getGlobal();
+    const ranking = await rankingService.getGlobal(req.query);
     res.status(200).json(ranking);
   } catch (error) {
     next(error);
@@ -11,7 +11,7 @@ const getGlobal = async (_req, res, next) => {
 
 const getByCategory = async (req, res, next) => {
   try {
-    const ranking = await rankingService.getByCategory(req.params.category);
+    const ranking = await rankingService.getByCategory(req.params.category, req.query);
     res.status(200).json(ranking);
   } catch (error) {
     next(error);

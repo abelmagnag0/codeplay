@@ -1,18 +1,19 @@
-import { ReactNode } from "react";
+import { ReactNode, useMemo } from "react";
 import { Home, Trophy, Target, Users, User, Shield, Bell, Zap, LogOut } from "lucide-react";
-import { Avatar, AvatarFallback } from "../ui/avatar";
-import { Badge } from "../ui/badge";
+import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { Button } from "../ui/button";
 import { Logo } from "./Logo";
+import type { User as UserType } from "../../types/api";
 
 interface MainLayoutProps {
   children: ReactNode;
   currentPage: string;
   onNavigate: (page: string) => void;
   onLogout: () => void;
+  user: UserType | null;
 }
 
-export function MainLayout({ children, currentPage, onNavigate, onLogout }: MainLayoutProps) {
+export function MainLayout({ children, currentPage, onNavigate, onLogout, user }: MainLayoutProps) {
   const menuItems = [
     { id: 'dashboard', icon: Home, label: 'Home' },
     { id: 'challenges', icon: Target, label: 'Desafios' },
@@ -24,6 +25,31 @@ export function MainLayout({ children, currentPage, onNavigate, onLogout }: Main
   const adminMenuItems = [
     { id: 'admin', icon: Shield, label: 'Admin' },
   ];
+
+  const computed = useMemo(() => {
+    if (!user) {
+      return {
+        initials: '??',
+        name: 'Convidado',
+        xp: 0,
+        avatar: null as string | null,
+      };
+    }
+
+    const initials = user.name
+      .split(' ')
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase())
+      .join('') || user.name.substring(0, 2).toUpperCase();
+
+    return {
+      initials,
+      name: user.name,
+      xp: user.xp,
+      avatar: user.avatar ?? null,
+    };
+  }, [user]);
 
   return (
     <div className="min-h-screen bg-background flex">
@@ -73,15 +99,16 @@ export function MainLayout({ children, currentPage, onNavigate, onLogout }: Main
         <div className="p-4 border-t border-border">
           <div className="flex items-center gap-3 p-3 rounded-lg bg-secondary/50">
             <Avatar className="w-10 h-10">
+              {computed.avatar ? <AvatarImage src={computed.avatar} alt={computed.name} /> : null}
               <AvatarFallback className="bg-primary/20 text-primary">
-                AD
+                {computed.initials}
               </AvatarFallback>
             </Avatar>
             <div className="flex-1 min-w-0">
-              <p className="font-medium truncate">AbelDev</p>
+              <p className="font-medium truncate">{computed.name}</p>
               <p className="text-xs text-muted-foreground flex items-center gap-1">
                 <Zap className="w-3 h-3" />
-                2,980 XP
+                {computed.xp.toLocaleString('pt-BR')} XP
               </p>
             </div>
             <Button
@@ -110,15 +137,16 @@ export function MainLayout({ children, currentPage, onNavigate, onLogout }: Main
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2 px-4 py-2 bg-accent/10 border border-accent/30 rounded-lg">
               <Zap className="w-5 h-5 text-accent" />
-              <span className="font-semibold text-accent">2,980 XP</span>
+              <span className="font-semibold text-accent">{computed.xp.toLocaleString('pt-BR')} XP</span>
             </div>
             <Button variant="ghost" size="icon" className="relative">
               <Bell className="w-5 h-5" />
               <span className="absolute top-1 right-1 w-2 h-2 bg-accent rounded-full"></span>
             </Button>
             <Avatar className="w-9 h-9 cursor-pointer hover:ring-2 hover:ring-primary transition-all" onClick={() => onNavigate('profile')}>
+              {computed.avatar ? <AvatarImage src={computed.avatar} alt={computed.name} /> : null}
               <AvatarFallback className="bg-primary/20 text-primary">
-                AD
+                {computed.initials}
               </AvatarFallback>
             </Avatar>
           </div>
