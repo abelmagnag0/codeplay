@@ -82,15 +82,17 @@ describe('Auth API', () => {
     expect(savedUser.emailVerification.expiresAt.getTime()).toBeGreaterThan(Date.now());
   });
 
-  test('rejects login until email is verified', async () => {
+  test('allows login even if email is not verified yet', async () => {
     await registerUser();
 
     const loginResponse = await request(app)
       .post('/api/auth/login')
       .send({ email: registerPayload.email, password: registerPayload.password });
 
-    expect(loginResponse.status).toBe(403);
-    expect(loginResponse.body.message).toMatch(/verification/i);
+    expect(loginResponse.status).toBe(200);
+    expect(loginResponse.body.accessToken).toBeTruthy();
+    expect(loginResponse.body.refreshToken).toBeTruthy();
+    expect(loginResponse.body.user.emailVerified).toBe(false);
   });
 
   test('rejects registration payload missing fields', async () => {

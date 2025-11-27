@@ -13,6 +13,9 @@ export interface User {
   xp: number;
   level: number;
   badges: string[];
+  bio?: string | null;
+  status?: 'active' | 'blocked';
+  emailVerified: boolean;
 }
 
 export interface RoomSummary {

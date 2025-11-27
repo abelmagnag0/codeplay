@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Send, MonitorUp, MonitorOff, Users, Settings, ChevronLeft, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Input } from "../ui/input";
@@ -7,7 +7,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { Badge } from "../ui/badge";
 import { ScrollArea } from "../ui/scroll-area";
 import { io, type Socket } from "socket.io-client";
-import type { Message as MessageType, RoomDetail, RoomPresenceState } from "../../types/api";
+import type { Message as MessageType, RoomDetail, RoomPresenceState, ScreenShareState } from "../../types/api";
 import { useAuth } from "../../contexts/AuthContext";
 import { apiFetch } from "../../lib/api";
 import { config } from "../../config";
@@ -23,21 +23,33 @@ type SendAck = { status: 'ok'; message: MessageType } | { status: 'error'; messa
 export function Chat({ room, onLeave }: ChatProps) {
   const { user, accessToken } = useAuth();
   const [message, setMessage] = useState("");
-  const [isSharing, setIsSharing] = useState(
-    room.screenShare.isActive && room.screenShare.ownerUserId === user?.id,
-  );
+  const [screenState, setScreenState] = useState<ScreenShareState>(room.screenShare);
   const [messages, setMessages] = useState<MessageType[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
+  const [isTogglingShare, setIsTogglingShare] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const [socketReady, setSocketReady] = useState(false);
   const [presence, setPresence] = useState<RoomPresenceState>(room.presence);
+  const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
+  const [remoteScreenStream, setRemoteScreenStream] = useState<MediaStream | null>(null);
+  const [isRequestingShare, setIsRequestingShare] = useState(false);
+
+  const localScreenVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteScreenVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const localScreenStreamRef = useRef<MediaStream | null>(null);
+  const remoteScreenStreamRef = useRef<MediaStream | null>(null);
+  const screenStateRef = useRef<ScreenShareState>(room.screenShare);
+  const userIdRef = useRef<string | null>(user?.id ?? null);
+  const pendingViewerRequestRef = useRef(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setIsSharing(room.screenShare.isActive && room.screenShare.ownerUserId === user?.id);
+    setScreenState(room.screenShare);
     setPresence(room.presence);
   }, [room, user]);
 
@@ -86,6 +98,324 @@ export function Chat({ room, onLeave }: ChatProps) {
   }, [messages]);
 
   useEffect(() => {
+    screenStateRef.current = screenState;
+  }, [screenState]);
+
+  useEffect(() => {
+    userIdRef.current = user?.id ?? null;
+  }, [user?.id]);
+
+  useEffect(() => {
+    localScreenStreamRef.current = localScreenStream;
+    if (localScreenVideoRef.current) {
+      localScreenVideoRef.current.srcObject = localScreenStream;
+    }
+  }, [localScreenStream]);
+
+  useEffect(() => {
+    remoteScreenStreamRef.current = remoteScreenStream;
+    if (remoteScreenVideoRef.current) {
+      remoteScreenVideoRef.current.srcObject = remoteScreenStream;
+    }
+  }, [remoteScreenStream]);
+
+  const closePeerConnection = useCallback((peerUserId: string) => {
+    const connection = peerConnections.current.get(peerUserId);
+    if (!connection) {
+      return;
+    }
+    connection.onicecandidate = null;
+    connection.ontrack = null;
+    connection.onconnectionstatechange = null;
+    connection.close();
+    peerConnections.current.delete(peerUserId);
+  }, []);
+
+  const stopAllPeerConnections = useCallback(() => {
+    peerConnections.current.forEach((connection) => {
+      connection.onicecandidate = null;
+      connection.ontrack = null;
+      connection.onconnectionstatechange = null;
+      connection.close();
+    });
+    peerConnections.current.clear();
+  }, []);
+
+  const stopRemotePlayback = useCallback((notifyServer: boolean) => {
+    const currentStream = remoteScreenStreamRef.current;
+    if (currentStream) {
+      currentStream.getTracks().forEach((track) => track.stop());
+    }
+    remoteScreenStreamRef.current = null;
+    setRemoteScreenStream(null);
+
+    const presenterId = screenStateRef.current?.ownerUserId;
+    if (presenterId) {
+      closePeerConnection(presenterId);
+    }
+
+    pendingViewerRequestRef.current = false;
+    setIsRequestingShare(false);
+
+    if (notifyServer) {
+      socketRef.current?.emit('screen:end', { roomId: room.id }, () => {
+        // Acknowledgement intentionally ignored for cleanup path
+      });
+    }
+  }, [closePeerConnection, room.id]);
+
+  const endPresenting = useCallback(async (notifyServer = true) => {
+    const currentStream = localScreenStreamRef.current;
+    if (currentStream) {
+      currentStream.getTracks().forEach((track) => track.stop());
+    }
+    localScreenStreamRef.current = null;
+    setLocalScreenStream(null);
+
+    stopAllPeerConnections();
+
+    if (socketRef.current && notifyServer) {
+      await new Promise<void>((resolve) => {
+        socketRef.current?.emit('screen:availability', { roomId: room.id, isAvailable: false }, (response: { status: 'ok'; state: ScreenShareState } | { status: 'error'; message?: string }) => {
+          if (response?.status === 'ok' && response.state) {
+            setScreenState(response.state);
+          } else if (response?.status === 'error') {
+            setError(response.message || 'Não foi possível encerrar o compartilhamento de tela');
+          }
+          resolve();
+        });
+      });
+    }
+  }, [room.id, stopAllPeerConnections]);
+
+  const createPeerConnection = useCallback((peerUserId: string, role: 'presenter' | 'viewer') => {
+    const existingConnection = peerConnections.current.get(peerUserId);
+    if (existingConnection) {
+      existingConnection.close();
+      peerConnections.current.delete(peerUserId);
+    }
+
+    const connection = new RTCPeerConnection({
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+    });
+
+    connection.onicecandidate = (event) => {
+      if (!event.candidate) {
+        return;
+      }
+
+      const targetUserId = role === 'presenter' ? peerUserId : screenStateRef.current?.ownerUserId;
+      if (!targetUserId) {
+        return;
+      }
+
+      socketRef.current?.emit('screen:ice-candidate', {
+        roomId: room.id,
+        targetUserId,
+        candidate: event.candidate,
+      }, (response: { status: 'ok' } | { status: 'error'; message?: string }) => {
+        if (response?.status === 'error') {
+          setError(response.message || 'Não foi possível enviar informações de rede');
+        }
+      });
+    };
+
+    if (role === 'viewer') {
+      connection.ontrack = (event) => {
+        const [stream] = event.streams;
+        if (stream) {
+          remoteScreenStreamRef.current = stream;
+          setRemoteScreenStream(stream);
+          setIsRequestingShare(false);
+          pendingViewerRequestRef.current = false;
+        }
+      };
+    }
+
+    connection.onconnectionstatechange = () => {
+      if (connection.connectionState === 'failed' || connection.connectionState === 'disconnected') {
+        if (role === 'viewer') {
+          stopRemotePlayback(false);
+        } else {
+          closePeerConnection(peerUserId);
+        }
+      }
+    };
+
+    peerConnections.current.set(peerUserId, connection);
+    return connection;
+  }, [closePeerConnection, room.id, stopRemotePlayback]);
+
+  const startPresenting = useCallback(async () => {
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      throw new Error('Seu navegador não suporta compartilhamento de tela.');
+    }
+
+    let stream: MediaStream | null = null;
+
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          frameRate: { ideal: 30, max: 60 },
+        },
+        audio: false,
+      });
+    } catch (err) {
+      if (err instanceof DOMException) {
+        if (err.name === 'AbortError') {
+          throw new Error('Captura de tela cancelada.');
+        }
+        if (err.name === 'NotAllowedError') {
+          throw new Error('Permissão de captura de tela negada.');
+        }
+      }
+      throw new Error('Não foi possível iniciar a captura de tela.');
+    }
+
+    localScreenStreamRef.current = stream;
+    setLocalScreenStream(stream);
+
+    const [videoTrack] = stream.getVideoTracks();
+    if (videoTrack) {
+      videoTrack.addEventListener('ended', () => {
+        void endPresenting();
+      });
+    }
+
+    const response = await new Promise<{ status: 'ok'; state: ScreenShareState } | { status: 'error'; message?: string }>((resolve) => {
+      socketRef.current?.emit('screen:availability', { roomId: room.id, isAvailable: true }, resolve);
+    });
+
+    if (response?.status === 'ok' && response.state) {
+      setScreenState(response.state);
+      return;
+    }
+
+    stream.getTracks().forEach((track) => track.stop());
+    localScreenStreamRef.current = null;
+    setLocalScreenStream(null);
+
+    const errorMessage = response?.status === 'error' ? response.message : undefined;
+    throw new Error(errorMessage || 'Não foi possível habilitar o compartilhamento de tela.');
+  }, [endPresenting, room.id]);
+
+  const handleScreenRequestEvent = useCallback(async (payload: { roomId: string; fromUserId: string; targetUserId: string }) => {
+    if (!payload || payload.roomId !== room.id) {
+      return;
+    }
+
+    if (payload.targetUserId !== userIdRef.current) {
+      return;
+    }
+
+    const stream = localScreenStreamRef.current;
+    if (!stream) {
+      socketRef.current?.emit('screen:end', { roomId: room.id }, () => {});
+      return;
+    }
+
+    try {
+      const viewerId = payload.fromUserId;
+      const connection = createPeerConnection(viewerId, 'presenter');
+      stream.getTracks().forEach((track) => {
+        connection.addTrack(track, stream as MediaStream);
+      });
+
+      const offer = await connection.createOffer({ offerToReceiveVideo: true });
+      await connection.setLocalDescription(offer);
+
+      socketRef.current?.emit('screen:offer', {
+        roomId: room.id,
+        targetUserId: viewerId,
+        description: offer,
+      }, (response: { status: 'ok' } | { status: 'error'; message?: string }) => {
+        if (response?.status === 'error') {
+          setError(response.message || 'Não foi possível preparar a transmissão de tela');
+        }
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Falha na negociação de compartilhamento de tela');
+    }
+  }, [createPeerConnection, room.id]);
+
+  const handleScreenOfferEvent = useCallback(async (payload: { roomId: string; fromUserId: string; targetUserId: string; description: RTCSessionDescriptionInit }) => {
+    if (!payload || payload.roomId !== room.id) {
+      return;
+    }
+
+    if (payload.targetUserId !== userIdRef.current) {
+      return;
+    }
+
+    try {
+      const presenterId = payload.fromUserId;
+      const connection = createPeerConnection(presenterId, 'viewer');
+      await connection.setRemoteDescription(new RTCSessionDescription(payload.description));
+
+      const answer = await connection.createAnswer();
+      await connection.setLocalDescription(answer);
+
+      socketRef.current?.emit('screen:answer', {
+        roomId: room.id,
+        targetUserId: presenterId,
+        description: answer,
+      }, (response: { status: 'ok'; state?: ScreenShareState } | { status: 'error'; message?: string }) => {
+        if (response?.status === 'error') {
+          setError(response.message || 'Não foi possível confirmar a recepção da tela');
+        } else if (response?.status === 'ok' && response.state) {
+          setScreenState(response.state);
+        }
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Falha ao aceitar a transmissão de tela');
+      setIsRequestingShare(false);
+      pendingViewerRequestRef.current = false;
+    }
+  }, [createPeerConnection, room.id]);
+
+  const handleScreenAnswerEvent = useCallback(async (payload: { roomId: string; fromUserId: string; targetUserId: string; description: RTCSessionDescriptionInit }) => {
+    if (!payload || payload.roomId !== room.id) {
+      return;
+    }
+
+    if (payload.targetUserId !== userIdRef.current) {
+      return;
+    }
+
+    const connection = peerConnections.current.get(payload.fromUserId);
+    if (!connection) {
+      return;
+    }
+
+    try {
+      await connection.setRemoteDescription(new RTCSessionDescription(payload.description));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao finalizar a negociação de tela');
+    }
+  }, [room.id]);
+
+  const handleIceCandidateEvent = useCallback(async (payload: { roomId: string; fromUserId: string; targetUserId: string; candidate: RTCIceCandidateInit }) => {
+    if (!payload || payload.roomId !== room.id) {
+      return;
+    }
+
+    if (payload.targetUserId !== userIdRef.current) {
+      return;
+    }
+
+    const connection = peerConnections.current.get(payload.fromUserId);
+    if (!connection) {
+      return;
+    }
+
+    try {
+      await connection.addIceCandidate(new RTCIceCandidate(payload.candidate));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível processar informações de rede');
+    }
+  }, [room.id]);
+
+  useEffect(() => {
     if (!accessToken) {
       return;
     }
@@ -106,6 +436,7 @@ export function Chat({ room, onLeave }: ChatProps) {
     socket.on('disconnect', () => {
       setSocketReady(false);
       setPresence({ roomId: room.id, participants: [] });
+      setScreenState({ roomId: room.id, isActive: false, ownerUserId: null, viewers: [] });
     });
 
     socket.on('message:new', (incoming: MessageType) => {
@@ -124,6 +455,18 @@ export function Chat({ room, onLeave }: ChatProps) {
       }
     });
 
+    const handleScreenState = (state: ScreenShareState) => {
+      if (state?.roomId === room.id) {
+        setScreenState(state);
+      }
+    };
+
+    socket.on('screen:state', handleScreenState);
+    socket.on('screen:request', handleScreenRequestEvent);
+    socket.on('screen:offer', handleScreenOfferEvent);
+    socket.on('screen:answer', handleScreenAnswerEvent);
+    socket.on('screen:ice-candidate', handleIceCandidateEvent);
+
     const handleForceLeave = (payload: { roomId: string; reason?: string }) => {
       if (payload?.roomId === room.id) {
         setError(payload.reason === 'exclusive-membership'
@@ -141,6 +484,11 @@ export function Chat({ room, onLeave }: ChatProps) {
         setSocketReady(false);
       } else {
         setSocketReady(true);
+        socket.emit('screen:state:request', room.id, (response?: { status: 'ok'; state: ScreenShareState } | { status: 'error'; message?: string }) => {
+          if (response?.status === 'ok' && response.state) {
+            setScreenState(response.state);
+          }
+        });
       }
     });
 
@@ -153,12 +501,19 @@ export function Chat({ room, onLeave }: ChatProps) {
       socket.off('connect_error', handleConnectError);
       socket.off('message:new');
       socket.off('room:presence:update');
+      socket.off('screen:state', handleScreenState);
+      socket.off('screen:request', handleScreenRequestEvent);
+      socket.off('screen:offer', handleScreenOfferEvent);
+      socket.off('screen:answer', handleScreenAnswerEvent);
+      socket.off('screen:ice-candidate', handleIceCandidateEvent);
       socket.off('room:force-leave', handleForceLeave);
+      stopRemotePlayback(true);
+      void endPresenting(false);
       socket.disconnect();
       socketRef.current = null;
       setSocketReady(false);
     };
-  }, [room.id, accessToken, onLeave]);
+  }, [room.id, accessToken, onLeave, handleScreenAnswerEvent, handleScreenOfferEvent, handleScreenRequestEvent, handleIceCandidateEvent, endPresenting, stopRemotePlayback]);
 
   const participants = useMemo(() => {
     if (presence.participants.length > 0) {
@@ -200,6 +555,21 @@ export function Chat({ room, onLeave }: ChatProps) {
 
     return Array.from(fallbackRecord.values());
   }, [presence.participants, messages, room.participants, user]);
+
+  const presenterName = useMemo(() => {
+    const ownerId = screenState.ownerUserId;
+    if (!ownerId) {
+      return null;
+    }
+    if (ownerId === user?.id) {
+      return 'Você';
+    }
+    const participant = participants.find((person) => person.id === ownerId);
+    if (participant) {
+      return participant.name;
+    }
+    return `Participante ${ownerId.slice(-4)}`;
+  }, [participants, screenState.ownerUserId, user?.id]);
 
   const formatTimestamp = (iso: string) => {
     const date = new Date(iso);
@@ -246,9 +616,92 @@ export function Chat({ room, onLeave }: ChatProps) {
     });
   };
 
-  const toggleScreenShare = () => {
-    setIsSharing((prev) => !prev);
+
+  const isPresenter = screenState.isActive && screenState.ownerUserId === user?.id;
+  const isScreenShareActive = screenState.isActive;
+  const isViewer = screenState.isActive && !!screenState.ownerUserId && screenState.ownerUserId !== user?.id;
+
+  const toggleScreenShare = async () => {
+    if (!socketRef.current || !socketReady) {
+      setError('Conexão com o chat não está pronta. Tente novamente.');
+      return;
+    }
+
+    if (!user?.id) {
+      setError('Usuário não autenticado.');
+      return;
+    }
+
+    if (localScreenStreamRef.current || isPresenter) {
+      setIsTogglingShare(true);
+      try {
+        await endPresenting();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Não foi possível encerrar o compartilhamento de tela');
+      } finally {
+        setIsTogglingShare(false);
+      }
+      return;
+    }
+
+    if (screenState.isActive && !isPresenter) {
+      setError('Outra pessoa já está compartilhando a tela desta sala.');
+      return;
+    }
+
+    setIsTogglingShare(true);
+    setError(null);
+
+    try {
+      await startPresenting();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível iniciar o compartilhamento de tela');
+    } finally {
+      setIsTogglingShare(false);
+    }
   };
+
+  useEffect(() => {
+    if (!screenState.isActive) {
+      if (localScreenStreamRef.current) {
+        void endPresenting(false);
+      }
+      if (remoteScreenStreamRef.current) {
+        stopRemotePlayback(false);
+      }
+    }
+  }, [screenState.isActive, endPresenting, stopRemotePlayback]);
+
+  useEffect(() => {
+    if (!socketReady || !socketRef.current) {
+      return;
+    }
+
+    const ownerId = screenState.ownerUserId;
+    const shouldView = screenState.isActive && ownerId && ownerId !== user?.id;
+
+    if (shouldView) {
+      if (!remoteScreenStreamRef.current && !pendingViewerRequestRef.current) {
+        pendingViewerRequestRef.current = true;
+        setIsRequestingShare(true);
+        socketRef.current.emit('screen:request', { roomId: room.id }, (response: { status: 'ok' } | { status: 'error'; message?: string }) => {
+          if (response?.status === 'error') {
+            setError(response.message || 'Não foi possível ingressar na transmissão');
+            setIsRequestingShare(false);
+            pendingViewerRequestRef.current = false;
+          }
+        });
+      }
+    } else {
+      if (pendingViewerRequestRef.current) {
+        pendingViewerRequestRef.current = false;
+      }
+      if (remoteScreenStreamRef.current) {
+        stopRemotePlayback(false);
+      }
+      setIsRequestingShare(false);
+    }
+  }, [room.id, screenState, socketReady, stopRemotePlayback, user?.id]);
 
   return (
     <div className="space-y-6">
@@ -283,7 +736,7 @@ export function Chat({ room, onLeave }: ChatProps) {
         {/* Main Chat Area */}
         <div className="lg:col-span-3 space-y-4">
           {/* Screen Share Area */}
-          {isSharing && (
+          {isPresenter && (
             <Card className="bg-card border-primary/30">
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between">
@@ -295,6 +748,7 @@ export function Chat({ room, onLeave }: ChatProps) {
                     variant="destructive"
                     size="sm"
                     onClick={toggleScreenShare}
+                    disabled={isTogglingShare}
                   >
                     <MonitorOff className="w-4 h-4 mr-2" />
                     Encerrar
@@ -302,13 +756,64 @@ export function Chat({ room, onLeave }: ChatProps) {
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="aspect-video bg-secondary rounded-lg border border-border flex items-center justify-center">
-                  <div className="text-center space-y-2">
-                    <MonitorUp className="w-12 h-12 mx-auto text-primary" />
-                    <p className="text-sm text-muted-foreground">
-                      Sua tela está sendo compartilhada
-                    </p>
-                  </div>
+                <div className="relative aspect-video rounded-lg border border-border bg-black/80 overflow-hidden">
+                  {localScreenStream ? (
+                    <video
+                      ref={localScreenVideoRef}
+                      className="h-full w-full object-contain bg-black"
+                      autoPlay
+                      playsInline
+                      muted
+                    />
+                  ) : (
+                    <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
+                      <Loader2 className="h-6 w-6 animate-spin" />
+                      <p className="text-sm text-center px-4">
+                        Preparando a captura de tela...
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {isViewer && (
+            <Card className="bg-card border-primary/30">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <MonitorUp className="w-4 h-4 text-primary" />
+                  {presenterName ? `${presenterName} está compartilhando a tela` : 'Compartilhamento de tela ativo'}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="relative aspect-video rounded-lg border border-border bg-black/80 overflow-hidden">
+                  {remoteScreenStream ? (
+                    <video
+                      ref={remoteScreenVideoRef}
+                      className="h-full w-full object-contain bg-black"
+                      autoPlay
+                      playsInline
+                    />
+                  ) : (
+                    <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
+                      {isRequestingShare ? (
+                        <>
+                          <Loader2 className="h-6 w-6 animate-spin" />
+                          <p className="text-sm text-center px-4">
+                            Aguardando a transmissão começar...
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <MonitorOff className="h-6 w-6" />
+                          <p className="text-sm text-center px-4">
+                            A transmissão foi encerrada ou não está disponível.
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -375,10 +880,16 @@ export function Chat({ room, onLeave }: ChatProps) {
                   <Button
                     type="button"
                     variant="outline"
-                    className={`border-border ${isSharing ? 'bg-primary/20 border-primary/50' : ''}`}
+                    className={`border-border ${isPresenter ? 'bg-primary/20 border-primary/50' : ''}`}
                     onClick={toggleScreenShare}
+                    disabled={isTogglingShare || !socketReady || (isScreenShareActive && !isPresenter)}
+                    title={
+                      isScreenShareActive && !isPresenter
+                        ? 'Outra pessoa já está compartilhando'
+                        : undefined
+                    }
                   >
-                    {isSharing ? <MonitorOff className="w-4 h-4" /> : <MonitorUp className="w-4 h-4" />}
+                    {isPresenter ? <MonitorOff className="w-4 h-4" /> : <MonitorUp className="w-4 h-4" />}
                   </Button>
                   <Button type="submit" className="bg-primary hover:bg-primary/90" disabled={isSending}>
                     {isSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}

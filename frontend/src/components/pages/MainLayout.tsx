@@ -27,27 +27,20 @@ export function MainLayout({ children, currentPage, onNavigate, onLogout, user }
   ];
 
   const computed = useMemo(() => {
-    if (!user) {
-      return {
-        initials: '??',
-        name: 'Convidado',
-        xp: 0,
-        avatar: null as string | null,
-      };
-    }
-
-    const initials = user.name
+    const safeName = user?.name?.trim() || 'Convidado';
+    const safeXp = typeof user?.xp === 'number' && Number.isFinite(user.xp) ? user.xp : 0;
+    const initials = safeName
       .split(' ')
       .filter(Boolean)
       .slice(0, 2)
       .map((part) => part[0]?.toUpperCase())
-      .join('') || user.name.substring(0, 2).toUpperCase();
+      .join('') || safeName.substring(0, 2).toUpperCase();
 
     return {
       initials,
-      name: user.name,
-      xp: user.xp,
-      avatar: user.avatar ?? null,
+      name: safeName,
+      xp: safeXp,
+      avatar: user?.avatar ?? null,
     };
   }, [user]);
 

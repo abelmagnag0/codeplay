@@ -13,14 +13,14 @@ const sanitizeUser = (user) => ({
   id: user.id,
   name: user.name,
   email: user.email,
-  xp: user.xp,
-  level: user.level,
-  badges: user.badges,
-  role: user.role,
-  avatar: user.avatar,
-  bio: user.bio,
-  status: user.status,
-  emailVerified: user.emailVerified,
+  xp: typeof user.xp === 'number' ? user.xp : 0,
+  level: typeof user.level === 'number' ? user.level : 1,
+  badges: Array.isArray(user.badges) ? user.badges : [],
+  role: user.role || 'user',
+  avatar: user.avatar ?? null,
+  bio: user.bio ?? null,
+  status: user.status || 'active',
+  emailVerified: Boolean(user.emailVerified),
   createdAt: user.createdAt,
   updatedAt: user.updatedAt,
 });
@@ -181,7 +181,7 @@ const login = async (credentials, context = {}) => {
   validatePassword(credentials?.password);
 
   const user = await userRepository.findByEmail(email);
-  assertUserIsActive(user, { requireEmailVerified: true });
+  assertUserIsActive(user);
 
   const passwordMatches = await bcrypt.compare(credentials.password, user.password);
   if (!passwordMatches) {
@@ -217,7 +217,7 @@ const refreshToken = async (token, context = {}) => {
   }
 
   const user = await userRepository.findByIdWithTokens(decoded.id);
-  assertUserIsActive(user, { requireEmailVerified: true });
+  assertUserIsActive(user);
 
   const storedToken = user.refreshTokens?.find((entry) => entry.tokenId === decoded.jti);
   if (!storedToken) {

@@ -1,13 +1,13 @@
 import { useCallback, useState } from "react";
-import { LoginScreen } from "./components/pages/LoginScreen.tsx";
-import { MainLayout } from "./components/pages/MainLayout.tsx";
-import { Dashboard } from "./components/pages/Dashboard.tsx";
-import { Challenges } from "./components/pages/Challenges.tsx";
-import { Ranking } from "./components/pages/Ranking.tsx";
-import { Rooms } from "./components/pages/Room.tsx";
-import { Chat } from "./components/pages/Chat.tsx";
-import { Profile } from "./components/pages/Profile.tsx";
-import { Admin } from "./components/pages/Admin.tsx";
+import { LoginScreen } from "./components/pages/LoginScreen";
+import { MainLayout } from "./components/pages/MainLayout";
+import { Dashboard } from "./components/pages/Dashboard";
+import { Challenges } from "./components/pages/Challenges";
+import { Ranking } from "./components/pages/Ranking";
+import { Rooms } from "./components/pages/Room";
+import { Chat } from "./components/pages/Chat";
+import { Profile } from "./components/pages/Profile";
+import { Admin } from "./components/pages/Admin";
 import { useAuth } from "./contexts/AuthContext";
 import type { RoomDetail } from "./types/api";
 
@@ -25,10 +25,6 @@ export default function App() {
     setCurrentPage(page as Page);
   }, []);
 
-  if (!isAuthenticated) {
-    return <LoginScreen />;
-  }
-
   const handleRoomSelected = useCallback((room: RoomDetail) => {
     setActiveRoom(room);
     setCurrentPage('chat');
@@ -38,6 +34,10 @@ export default function App() {
     setActiveRoom(null);
     setCurrentPage('rooms');
   }, []);
+
+  if (!isAuthenticated) {
+    return <LoginScreen />;
+  }
 
   const renderPage = () => {
     switch (currentPage) {
